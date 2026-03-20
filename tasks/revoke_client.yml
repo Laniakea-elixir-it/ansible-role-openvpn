@@ -1,11 +1,11 @@
 ---
 # Revoke an existing OpenVPN client
-# Usage: ansible-playbook playbook.yml --tags revoke_client -e "openvpn_client_name=mario"
+# Usage: ansible-playbook playbook.yml --tags revoke_client -e "openvpn_client_name=test"
 
 - name: Ensure client name is provided
   ansible.builtin.assert:
     that: openvpn_client_name is defined and openvpn_client_name | length > 0
-    fail_msg: "You must set openvpn_client_name, e.g. -e openvpn_client_name=mario"
+    fail_msg: "You must set openvpn_client_name, e.g. -e openvpn_client_name=test"
 
 - name: Check client cert exists
   ansible.builtin.stat:
