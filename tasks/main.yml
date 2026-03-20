@@ -1,0 +1,22 @@
+---
+# Default action: install.
+# Use tags to invoke other actions:
+#   --tags add_client    -e "openvpn_client_name=test"
+#   --tags revoke_client -e "openvpn_client_name=test"
+#   --tags remove_openvpn
+
+- name: Install OpenVPN server
+  ansible.builtin.include_tasks: install.yml
+  tags: [always]
+
+- name: Add a client
+  ansible.builtin.include_tasks: add_client.yml
+  tags: [never, add_client]
+
+- name: Revoke a client
+  ansible.builtin.include_tasks: revoke_client.yml
+  tags: [never, revoke_client]
+
+- name: Remove OpenVPN
+  ansible.builtin.include_tasks: remove.yml
+  tags: [never, remove_openvpn]

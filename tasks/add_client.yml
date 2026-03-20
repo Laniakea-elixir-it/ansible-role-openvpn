@@ -1,0 +1,36 @@
+---
+# Add a new OpenVPN client
+# Usage: ansible-playbook playbook.yml --tags add_client -e "openvpn_client_name=mario"
+
+- name: Ensure client name is provided
+  ansible.builtin.assert:
+    that: openvpn_client_name is defined and openvpn_client_name | length > 0
+    fail_msg: "You must set openvpn_client_name, e.g. -e openvpn_client_name=mario"
+
+- name: Check client cert does not already exist
+  ansible.builtin.stat:
+    path: "/etc/openvpn/server/easy-rsa/pki/issued/{{ openvpn_client_name }}.crt"
+  register: client_cert
+
+- name: Fail if client already exists
+  ansible.builtin.fail:
+    msg: "Client '{{ openvpn_client_name }}' already exists. Choose a different name."
+  when: client_cert.stat.exists
+
+- name: Build client certificate
+  ansible.builtin.command:
+    cmd: "./easyrsa --batch --days={{ easyrsa_cert_days }} build-client-full {{ openvpn_client_name }} nopass"
+    chdir: /etc/openvpn/server/easy-rsa
+  changed_when: true
+
+- name: Assemble client .ovpn profile
+  ansible.builtin.shell: >
+    grep -vh '^#'
+    /etc/openvpn/server/client-common.txt
+    /etc/openvpn/server/easy-rsa/pki/inline/private/{{ openvpn_client_name }}.inline
+    > {{ openvpn_client_output_dir }}/vpn-{{ openvpn_public_ip }}-{{ openvpn_client_name }}.vpn
+  changed_when: true
+
+- name: Client added
+  ansible.builtin.debug:
+    msg: "Client profile: {{ openvpn_client_output_dir }}/vpn-{{ openvpn_public_ip }}-{{ openvpn_client_name }}.vpn"

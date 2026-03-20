@@ -1,0 +1,47 @@
+---
+# ------------------------------------------------------------------------------
+# OpenVPN role - default variables
+# Override in inventory host_vars/group_vars or with -e on the command line
+# ------------------------------------------------------------------------------
+
+# --- REQUIRED (no defaults — must be provided explicitly) ---
+# openvpn_public_ip: "1.2.3.4"         # public IP clients connect to
+# openvpn_tenant_network: "172.18.7.0" # private tenant network pushed to clients
+# openvpn_tenant_iface: "ens4"         # interface toward tenant network (e.g. ens3, ens4, eth1)
+# openvpn_tenant_prefix: "24"          # prefix length of tenant network
+
+# Satisfy the 'length > 0' guards — role will assert and fail with a clear
+# message if these are still empty at runtime.
+openvpn_public_ip: ""
+openvpn_tenant_network: ""
+openvpn_tenant_iface: ""
+openvpn_tenant_prefix: ""
+
+# --- Network ---
+openvpn_port: "1194"
+openvpn_protocol: "tcp"              # udp | tcp
+openvpn_server_subnet: "10.8.0.0"
+openvpn_server_mask: "255.255.255.0"
+openvpn_tenant_netmask: "255.255.255.0"
+openvpn_ipv6_subnet: "fddd:1194:1194:1194::/64"
+
+# --- DNS pushed to clients ---
+# system | google | cloudflare | opendns | quad9 | gcore | adguard
+openvpn_dns: "google"
+
+# --- Crypto ---
+openvpn_cipher: "AES-256-CBC"
+
+# --- PAM plugin ---
+openvpn_pam_plugin_path: "/usr/lib/x86_64-linux-gnu/openvpn/plugins/openvpn-plugin-auth-pam.so"
+openvpn_reneg_sec: 0
+openvpn_hand_window: 300
+
+# --- Client ---
+openvpn_client_name: "client"
+openvpn_client_output_dir: "/root"
+
+# --- Easy-RSA ---
+easyrsa_version: "3.2.5"
+easyrsa_url: "https://github.com/OpenVPN/easy-rsa/releases/download/v{{ easyrsa_version }}/EasyRSA-{{ easyrsa_version }}.tgz"
+easyrsa_cert_days: 3650

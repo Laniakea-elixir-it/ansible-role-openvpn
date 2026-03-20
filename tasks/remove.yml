@@ -1,0 +1,53 @@
+---
+# Remove OpenVPN completely
+# Usage: ansible-playbook playbook.yml --tags remove_openvpn
+
+- name: Stop and disable openvpn-server service
+  ansible.builtin.systemd:
+    name: openvpn-server@server
+    enabled: false
+    state: stopped
+  failed_when: false
+
+- name: Stop and disable openvpn-iptables service
+  ansible.builtin.systemd:
+    name: openvpn-iptables
+    enabled: false
+    state: stopped
+  failed_when: false
+
+- name: Remove systemd unit and config files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/openvpn-iptables.service
+    - /etc/systemd/system/openvpn-server@server.service.d/disable-limitnproc.conf
+    - /etc/systemd/system/openvpn-server@server.service.d
+    - /etc/sysctl.d/99-openvpn-forward.conf
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Remove OpenVPN package (Debian/Ubuntu)
+  ansible.builtin.apt:
+    name: openvpn
+    state: absent
+    purge: true
+  when: ansible_distribution in ['Ubuntu', 'Debian']
+
+- name: Remove OpenVPN package (RHEL-family)
+  ansible.builtin.dnf:
+    name: openvpn
+    state: absent
+  when: ansible_distribution in ['AlmaLinux', 'Rocky', 'CentOS', 'Fedora']
+
+- name: Remove /etc/openvpn/server directory
+  ansible.builtin.file:
+    path: /etc/openvpn/server
+    state: absent
+
+- name: OpenVPN removed
+  ansible.builtin.debug:
+    msg: "OpenVPN has been removed from the system."

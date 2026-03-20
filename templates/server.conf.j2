@@ -1,0 +1,52 @@
+local {{ server_ip }}
+port {{ openvpn_port }}
+proto {{ openvpn_protocol }}
+dev tun
+ca ca.crt
+cert server.crt
+key server.key
+dh dh.pem
+auth SHA512
+tls-crypt tc.key
+topology subnet
+server {{ openvpn_server_subnet }} {{ openvpn_server_mask }}
+{% if server_ip6 | default('') | length > 0 %}
+server-ipv6 {{ openvpn_ipv6_subnet }}
+{% endif %}
+# push "redirect-gateway def1 bypass-dhcp"
+push "route {{ tenant_network }} {{ tenant_netmask }}"
+ifconfig-pool-persist ipp.txt
+{% if openvpn_dns == 'google' %}
+push "dhcp-option DNS 8.8.8.8"
+push "dhcp-option DNS 8.8.4.4"
+{% elif openvpn_dns == 'cloudflare' %}
+push "dhcp-option DNS 1.1.1.1"
+push "dhcp-option DNS 1.0.0.1"
+{% elif openvpn_dns == 'opendns' %}
+push "dhcp-option DNS 208.67.222.222"
+push "dhcp-option DNS 208.67.220.220"
+{% elif openvpn_dns == 'quad9' %}
+push "dhcp-option DNS 9.9.9.9"
+push "dhcp-option DNS 149.112.112.112"
+{% elif openvpn_dns == 'gcore' %}
+push "dhcp-option DNS 95.85.95.85"
+push "dhcp-option DNS 2.56.220.2"
+{% elif openvpn_dns == 'adguard' %}
+push "dhcp-option DNS 94.140.14.14"
+push "dhcp-option DNS 94.140.15.15"
+{% endif %}
+# push "block-outside-dns"
+keepalive 10 120
+cipher {{ openvpn_cipher }}
+user nobody
+group {{ vpn_group }}
+persist-key
+persist-tun
+verb 3
+crl-verify crl.pem
+plugin {{ openvpn_pam_plugin_path }} openvpn
+duplicate-cn
+setenv deferred_auth_pam 1
+reneg-sec {{ openvpn_reneg_sec }}
+hand-window {{ openvpn_hand_window }}
+username-as-common-name

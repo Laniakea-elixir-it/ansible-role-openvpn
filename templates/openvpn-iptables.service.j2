@@ -1,0 +1,22 @@
+[Unit]
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Allow inbound VPN connections
+ExecStart=/sbin/iptables -w 5 -I INPUT -p {{ openvpn_protocol }} --dport {{ openvpn_port }} -j ACCEPT
+# Allow forwarding from VPN subnet to tenant network and back
+ExecStart=/sbin/iptables -w 5 -I FORWARD -s {{ openvpn_server_subnet }}/24 -d {{ tenant_network }}/{{ tenant_prefix }} -j ACCEPT
+ExecStart=/sbin/iptables -w 5 -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+# MASQUERADE VPN traffic going out toward the tenant network
+ExecStart=/sbin/iptables -w 5 -t nat -A POSTROUTING -s {{ openvpn_server_subnet }}/24 -d {{ tenant_network }}/{{ tenant_prefix }} -o {{ openvpn_tenant_iface }} -j MASQUERADE
+
+ExecStop=/sbin/iptables  -w 5 -D INPUT -p {{ openvpn_protocol }} --dport {{ openvpn_port }} -j ACCEPT
+ExecStop=/sbin/iptables  -w 5 -D FORWARD -s {{ openvpn_server_subnet }}/24 -d {{ tenant_network }}/{{ tenant_prefix }} -j ACCEPT
+ExecStop=/sbin/iptables  -w 5 -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+ExecStop=/sbin/iptables  -w 5 -t nat -D POSTROUTING -s {{ openvpn_server_subnet }}/24 -d {{ tenant_network }}/{{ tenant_prefix }} -o {{ openvpn_tenant_iface }} -j MASQUERADE
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

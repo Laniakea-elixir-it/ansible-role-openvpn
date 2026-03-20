@@ -1,0 +1,402 @@
+---
+# Install and configure OpenVPN server (skip if already installed)
+
+- name: Check if OpenVPN is already installed
+  ansible.builtin.stat:
+    path: /etc/openvpn/server/server.conf
+  register: openvpn_conf
+
+- name: OpenVPN already installed — skipping install
+  ansible.builtin.debug:
+    msg: "OpenVPN is already installed. Use --tags add_client or --tags remove_openvpn."
+  when: openvpn_conf.stat.exists
+
+- name: Run installation tasks
+  when: not openvpn_conf.stat.exists
+  block:
+
+    # pre-checks
+    - name: Verify TUN device is available
+      ansible.builtin.stat:
+        path: /dev/net/tun
+      register: tun_device
+      failed_when: not tun_device.stat.exists
+
+    - name: Validate supported OS
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution in ['Ubuntu', 'Debian', 'AlmaLinux', 'Rocky', 'CentOS', 'Fedora']
+        fail_msg: "Unsupported OS: {{ ansible_distribution }}"
+
+    - name: Validate Ubuntu >= 22.04
+      ansible.builtin.assert:
+        that: ansible_distribution_version is version('22.04', '>=')
+        fail_msg: "Ubuntu 22.04 or higher is required."
+      when: ansible_distribution == 'Ubuntu'
+
+    - name: Validate Debian >= 11
+      ansible.builtin.assert:
+        that: ansible_distribution_major_version | int >= 11
+        fail_msg: "Debian 11 or higher is required."
+      when: ansible_distribution == 'Debian'
+
+    - name: Validate CentOS/AlmaLinux/Rocky >= 9
+      ansible.builtin.assert:
+        that: ansible_distribution_major_version | int >= 9
+        fail_msg: "{{ ansible_distribution }} 9 or higher is required."
+      when: ansible_distribution in ['AlmaLinux', 'Rocky', 'CentOS']
+
+    # validate required inputs
+    - name: Validate openvpn_public_ip is set
+      ansible.builtin.assert:
+        that: openvpn_public_ip | length > 0
+        fail_msg: >
+          openvpn_public_ip is required. Set it in your inventory (ansible_host
+          or as a host var), group_vars, or pass it with -e openvpn_public_ip=1.2.3.4
+
+    - name: Validate openvpn_tenant_network is set
+      ansible.builtin.assert:
+        that: openvpn_tenant_network | length > 0
+        fail_msg: >
+          openvpn_tenant_network is required. Set it in group_vars or pass it
+          with -e openvpn_tenant_network=172.18.7.0
+
+    # set IPs
+    - name: Set server public IP and tenant network facts
+      ansible.builtin.set_fact:
+        server_ip: "{{ openvpn_public_ip }}"
+        server_ip6: "{{ ansible_default_ipv6.address | default('') }}"
+        tenant_network: "{{ openvpn_tenant_network }}"
+        tenant_netmask: "{{ openvpn_tenant_netmask }}"
+
+    - name: Validate openvpn_tenant_iface and openvpn_tenant_prefix are set
+      ansible.builtin.assert:
+        that:
+          - openvpn_tenant_iface | length > 0
+          - openvpn_tenant_prefix | length > 0
+        fail_msg: >
+          openvpn_tenant_iface and openvpn_tenant_prefix are required.
+          Example: openvpn_tenant_iface: ens4   openvpn_tenant_prefix: "24"
+
+    - name: Set tenant interface and prefix facts
+      ansible.builtin.set_fact:
+        tenant_prefix: "{{ openvpn_tenant_prefix }}"
+
+    - name: Show effective configuration
+      ansible.builtin.debug:
+        msg:
+          - "Public IP      : {{ server_ip }}"
+          - "Tenant net     : {{ tenant_network }}/{{ tenant_prefix }}"
+          - "Tenant iface   : {{ openvpn_tenant_iface }}"
+
+    # OS-specific facts
+    - name: Set OS group (Debian/Ubuntu)
+      ansible.builtin.set_fact:
+        vpn_group: "nogroup"
+      when: ansible_distribution in ['Ubuntu', 'Debian']
+
+    - name: Set OS group (RHEL-family)
+      ansible.builtin.set_fact:
+        vpn_group: "nobody"
+      when: ansible_distribution in ['AlmaLinux', 'Rocky', 'CentOS', 'Fedora']
+
+    # packages
+    - name: Install packages (Debian/Ubuntu)
+      ansible.builtin.apt:
+        name: [openvpn, openssl, ca-certificates, iptables, wget]
+        state: present
+        update_cache: true
+      when: ansible_distribution in ['Ubuntu', 'Debian']
+
+    - name: Install EPEL (CentOS/AlmaLinux/Rocky)
+      ansible.builtin.dnf:
+        name: epel-release
+        state: present
+      when: ansible_distribution in ['AlmaLinux', 'Rocky', 'CentOS']
+
+    - name: Install packages (RHEL-family)
+      ansible.builtin.dnf:
+        name: [openvpn, openssl, ca-certificates, tar, iptables, wget]
+        state: present
+      when: ansible_distribution in ['AlmaLinux', 'Rocky', 'CentOS', 'Fedora']
+
+    # container: disable LimitNPROC
+    - name: Detect if running inside a container
+      ansible.builtin.command: systemd-detect-virt -c
+      register: virt_type
+      failed_when: false
+      changed_when: false
+
+    - name: Create systemd override dir for openvpn-server
+      ansible.builtin.file:
+        path: /etc/systemd/system/openvpn-server@server.service.d
+        state: directory
+        mode: "0755"
+      when: virt_type.rc == 0
+
+    - name: Disable LimitNPROC (container environments)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/openvpn-server@server.service.d/disable-limitnproc.conf
+        content: |
+          [Service]
+          LimitNPROC=infinity
+        mode: "0644"
+      when: virt_type.rc == 0
+
+    # Easy-RSA
+    - name: Create Easy-RSA directory
+      ansible.builtin.file:
+        path: /etc/openvpn/server/easy-rsa
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Download and extract Easy-RSA
+      ansible.builtin.unarchive:
+        src: "{{ easyrsa_url }}"
+        dest: /etc/openvpn/server/easy-rsa
+        remote_src: true
+        extra_opts: ["--strip-components=1"]
+        owner: root
+        group: root
+
+    # PKI
+    - name: Initialize PKI
+      ansible.builtin.command:
+        cmd: ./easyrsa --batch init-pki
+        chdir: /etc/openvpn/server/easy-rsa
+        creates: /etc/openvpn/server/easy-rsa/pki
+
+    - name: Build CA (no password)
+      ansible.builtin.command:
+        cmd: ./easyrsa --batch build-ca nopass
+        chdir: /etc/openvpn/server/easy-rsa
+        creates: /etc/openvpn/server/easy-rsa/pki/ca.crt
+
+    - name: Generate TLS crypt key
+      ansible.builtin.command:
+        cmd: ./easyrsa gen-tls-crypt-key
+        chdir: /etc/openvpn/server/easy-rsa
+        creates: /etc/openvpn/server/easy-rsa/pki/private/easyrsa-tls.key
+
+    - name: Write predefined DH parameters (ffdhe2048)
+      ansible.builtin.copy:
+        dest: /etc/openvpn/server/dh.pem
+        mode: "0600"
+        content: |
+          -----BEGIN DH PARAMETERS-----
+          MIIBCAKCAQEA//////////+t+FRYortKmq/cViAnPTzx2LnFg84tNpWp4TZBFGQz
+          +8yTnc4kmz75fS/jY2MMddj2gbICrsRhetPfHtXV/WVhJDP1H18GbtCFY2VVPe0a
+          87VXE15/V8k1mE8McODmi3fipona8+/och3xWKE2rec1MKzKT0g6eXq8CrGCsyT7
+          YdEIqUuyyOP7uWrat2DX9GgdT0Kj3jlN9K5W7edjcrsZCwenyO4KbXCeAvzhzffi
+          7MA0BM0oNC9hkXL+nOmFg/+OTxIy7vKBg8P+OxtMb61zO7X8vC7CIAXFjvGDfRaD
+          ssbzSibBsu/6iGtCOGEoXJf//////////wIBAg==
+          -----END DH PARAMETERS-----
+
+    - name: Symlink DH params into PKI dir
+      ansible.builtin.file:
+        src: /etc/openvpn/server/dh.pem
+        dest: /etc/openvpn/server/easy-rsa/pki/dh.pem
+        state: link
+
+    - name: Build server certificate
+      ansible.builtin.command:
+        cmd: "./easyrsa --batch --days={{ easyrsa_cert_days }} build-server-full server nopass"
+        chdir: /etc/openvpn/server/easy-rsa
+        creates: /etc/openvpn/server/easy-rsa/pki/issued/server.crt
+
+    - name: Build first client certificate
+      ansible.builtin.command:
+        cmd: "./easyrsa --batch --days={{ easyrsa_cert_days }} build-client-full {{ openvpn_client_name }} nopass"
+        chdir: /etc/openvpn/server/easy-rsa
+        creates: "/etc/openvpn/server/easy-rsa/pki/issued/{{ openvpn_client_name }}.crt"
+
+    - name: Generate CRL
+      ansible.builtin.command:
+        cmd: "./easyrsa --batch --days={{ easyrsa_cert_days }} gen-crl"
+        chdir: /etc/openvpn/server/easy-rsa
+        creates: /etc/openvpn/server/easy-rsa/pki/crl.pem
+
+    # ---------- copy PKI files ----------
+    - name: Copy PKI files to /etc/openvpn/server
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        remote_src: true
+        mode: "0600"
+      loop:
+        - { src: /etc/openvpn/server/easy-rsa/pki/ca.crt,              dest: /etc/openvpn/server/ca.crt }
+        - { src: /etc/openvpn/server/easy-rsa/pki/private/ca.key,      dest: /etc/openvpn/server/ca.key }
+        - { src: /etc/openvpn/server/easy-rsa/pki/issued/server.crt,   dest: /etc/openvpn/server/server.crt }
+        - { src: /etc/openvpn/server/easy-rsa/pki/private/server.key,  dest: /etc/openvpn/server/server.key }
+        - { src: /etc/openvpn/server/easy-rsa/pki/private/easyrsa-tls.key, dest: /etc/openvpn/server/tc.key }
+
+    - name: Copy CRL
+      ansible.builtin.copy:
+        src: /etc/openvpn/server/easy-rsa/pki/crl.pem
+        dest: /etc/openvpn/server/crl.pem
+        remote_src: true
+        mode: "0640"
+
+    - name: Set CRL ownership
+      ansible.builtin.file:
+        path: /etc/openvpn/server/crl.pem
+        owner: nobody
+        group: "{{ vpn_group }}"
+
+    - name: Set execute bit on /etc/openvpn/server (needed for CRL stat)
+      ansible.builtin.file:
+        path: /etc/openvpn/server
+        mode: "o+x"
+
+    # server.conf
+    - name: Write server.conf from template
+      ansible.builtin.template:
+        src: server.conf.j2
+        dest: /etc/openvpn/server/server.conf
+        mode: "0600"
+      notify: Restart OpenVPN
+
+    # client-common.txt
+    - name: Write client-common.txt from template
+      ansible.builtin.template:
+        src: client-common.txt.j2
+        dest: /etc/openvpn/server/client-common.txt
+        mode: "0600"
+
+    # IP forwarding
+    - name: Enable IPv4 forwarding
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_forward
+        value: "1"
+        sysctl_file: /etc/sysctl.d/99-openvpn-forward.conf
+        reload: true
+        state: present
+
+    - name: Enable IPv6 forwarding (if IPv6 present)
+      ansible.posix.sysctl:
+        name: net.ipv6.conf.all.forwarding
+        value: "1"
+        sysctl_file: /etc/sysctl.d/99-openvpn-forward.conf
+        reload: true
+        state: present
+      when: server_ip6 | length > 0
+
+    # firewall
+    - name: Check if firewalld is active
+      ansible.builtin.systemd:
+        name: firewalld
+      register: firewalld_status
+      failed_when: false
+
+    - name: Firewalld — open VPN port
+      ansible.posix.firewalld:
+        port: "{{ openvpn_port }}/{{ openvpn_protocol }}"
+        permanent: true
+        immediate: true
+        state: enabled
+      when:
+        - firewalld_status.status is defined
+        - firewalld_status.status.ActiveState == 'active'
+
+    - name: Firewalld — trust VPN subnet
+      ansible.posix.firewalld:
+        zone: trusted
+        source: "{{ openvpn_server_subnet }}/24"
+        permanent: true
+        immediate: true
+        state: enabled
+      when:
+        - firewalld_status.status is defined
+        - firewalld_status.status.ActiveState == 'active'
+
+    - name: Firewalld — add SNAT rule
+      ansible.builtin.command: >
+        firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0
+        -s {{ openvpn_server_subnet }}/24 ! -d {{ openvpn_server_subnet }}/24
+        -j SNAT --to {{ server_ip }}
+      when:
+        - firewalld_status.status is defined
+        - firewalld_status.status.ActiveState == 'active'
+      changed_when: true
+      notify: Reload firewalld
+
+    - name: Iptables — deploy systemd service
+      ansible.builtin.template:
+        src: openvpn-iptables.service.j2
+        dest: /etc/systemd/system/openvpn-iptables.service
+        mode: "0644"
+      when: >
+        firewalld_status.status is not defined or
+        firewalld_status.status.ActiveState != 'active'
+
+    - name: Iptables — enable and start service
+      ansible.builtin.systemd:
+        name: openvpn-iptables
+        enabled: true
+        state: started
+        daemon_reload: true
+      when: >
+        firewalld_status.status is not defined or
+        firewalld_status.status.ActiveState != 'active'
+
+    # SELinux
+    - name: Check SELinux status
+      ansible.builtin.command: sestatus
+      register: selinux_status
+      failed_when: false
+      changed_when: false
+
+    - name: Install policycoreutils-python-utils (SELinux + custom port)
+      ansible.builtin.dnf:
+        name: policycoreutils-python-utils
+        state: present
+      when:
+        - selinux_status.stdout is defined
+        - "'enforcing' in selinux_status.stdout"
+        - openvpn_port != '1194'
+        - ansible_distribution in ['AlmaLinux', 'Rocky', 'CentOS', 'Fedora']
+
+    - name: Allow custom OpenVPN port in SELinux
+      ansible.builtin.command: >
+        semanage port -a -t openvpn_port_t -p {{ openvpn_protocol }} {{ openvpn_port }}
+      when:
+        - selinux_status.stdout is defined
+        - "'enforcing' in selinux_status.stdout"
+        - openvpn_port != '1194'
+      failed_when: false
+      changed_when: true
+
+    # PAM
+    - name: Configure /etc/pam.d/openvpn with pam_oauth2_device
+      ansible.builtin.copy:
+        dest: /etc/pam.d/openvpn
+        mode: "0644"
+        content: |
+          auth     required    pam_oauth2_device.so
+          account  sufficient  pam_oauth2_device.so
+
+    # create client .ovpn
+    - name: Assemble first client .ovpn profile
+      ansible.builtin.shell: >
+        grep -vh '^#'
+        /etc/openvpn/server/client-common.txt
+        /etc/openvpn/server/easy-rsa/pki/inline/private/{{ openvpn_client_name }}.inline
+        > {{ openvpn_client_output_dir }}/vpn-{{ openvpn_public_ip }}-{{ openvpn_client_name }}.vpn
+      args:
+        creates: "{{ openvpn_client_output_dir }}/vpn-{{ openvpn_public_ip }}-{{ openvpn_client_name }}.vpn"
+
+    # start service
+    - name: Enable and start openvpn-server
+      ansible.builtin.systemd:
+        name: openvpn-server@server
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Installation complete
+      ansible.builtin.debug:
+        msg:
+          - "OpenVPN installed successfully."
+          - "Client profile: {{ openvpn_client_output_dir }}/vpn-{{ openvpn_public_ip }}-{{ openvpn_client_name }}.vpn"

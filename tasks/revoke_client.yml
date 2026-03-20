@@ -1,0 +1,55 @@
+---
+# Revoke an existing OpenVPN client
+# Usage: ansible-playbook playbook.yml --tags revoke_client -e "openvpn_client_name=mario"
+
+- name: Ensure client name is provided
+  ansible.builtin.assert:
+    that: openvpn_client_name is defined and openvpn_client_name | length > 0
+    fail_msg: "You must set openvpn_client_name, e.g. -e openvpn_client_name=mario"
+
+- name: Check client cert exists
+  ansible.builtin.stat:
+    path: "/etc/openvpn/server/easy-rsa/pki/issued/{{ openvpn_client_name }}.crt"
+  register: client_cert
+
+- name: Fail if client does not exist
+  ansible.builtin.fail:
+    msg: "Client '{{ openvpn_client_name }}' not found."
+  when: not client_cert.stat.exists
+
+- name: Detect OS group
+  ansible.builtin.set_fact:
+    vpn_group: "{{ 'nogroup' if ansible_distribution in ['Ubuntu', 'Debian'] else 'nobody' }}"
+
+- name: Revoke client certificate
+  ansible.builtin.command:
+    cmd: "./easyrsa --batch revoke {{ openvpn_client_name }}"
+    chdir: /etc/openvpn/server/easy-rsa
+  changed_when: true
+
+- name: Regenerate CRL
+  ansible.builtin.command:
+    cmd: "./easyrsa --batch --days={{ easyrsa_cert_days }} gen-crl"
+    chdir: /etc/openvpn/server/easy-rsa
+  changed_when: true
+
+- name: Deploy updated CRL
+  ansible.builtin.copy:
+    src: /etc/openvpn/server/easy-rsa/pki/crl.pem
+    dest: /etc/openvpn/server/crl.pem
+    remote_src: true
+    mode: "0640"
+    owner: nobody
+    group: "{{ vpn_group }}"
+
+- name: Remove client request and key files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "/etc/openvpn/server/easy-rsa/pki/reqs/{{ openvpn_client_name }}.req"
+    - "/etc/openvpn/server/easy-rsa/pki/private/{{ openvpn_client_name }}.key"
+
+- name: Client revoked
+  ansible.builtin.debug:
+    msg: "Client '{{ openvpn_client_name }}' has been revoked."
