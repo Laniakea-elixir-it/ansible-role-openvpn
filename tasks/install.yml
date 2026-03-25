@@ -383,9 +383,9 @@
         grep -vh '^#'
         /etc/openvpn/server/client-common.txt
         /etc/openvpn/server/easy-rsa/pki/inline/private/{{ openvpn_client_name }}.inline
-        > {{ openvpn_client_output_dir }}/vpn-{{ openvpn_public_ip }}-{{ openvpn_client_name }}.vpn
+        > {{ openvpn_client_output_dir }}/vpn-{{ openvpn_public_ip }}-{{ openvpn_client_name }}.ovpn
       args:
-        creates: "{{ openvpn_client_output_dir }}/vpn-{{ openvpn_public_ip }}-{{ openvpn_client_name }}.vpn"
+        creates: "{{ openvpn_client_output_dir }}/vpn-{{ openvpn_public_ip }}-{{ openvpn_client_name }}.ovpn"
 
     # start service
     - name: Enable and start openvpn-server
@@ -399,4 +399,4 @@
       ansible.builtin.debug:
         msg:
           - "OpenVPN installed successfully."
-          - "Client profile: {{ openvpn_client_output_dir }}/vpn-{{ openvpn_public_ip }}-{{ openvpn_client_name }}.vpn"
+          - "Client profile: {{ openvpn_client_output_dir }}/vpn-{{ openvpn_public_ip }}-{{ openvpn_client_name }}.ovpn"

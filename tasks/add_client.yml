@@ -28,9 +28,9 @@
     grep -vh '^#'
     /etc/openvpn/server/client-common.txt
     /etc/openvpn/server/easy-rsa/pki/inline/private/{{ openvpn_client_name }}.inline
-    > {{ openvpn_client_output_dir }}/vpn-{{ openvpn_public_ip }}-{{ openvpn_client_name }}.vpn
+    > {{ openvpn_client_output_dir }}/vpn-{{ openvpn_public_ip }}-{{ openvpn_client_name }}.ovpn
   changed_when: true
 
 - name: Client added
   ansible.builtin.debug:
-    msg: "Client profile: {{ openvpn_client_output_dir }}/vpn-{{ openvpn_public_ip }}-{{ openvpn_client_name }}.vpn"
+    msg: "Client profile: {{ openvpn_client_output_dir }}/vpn-{{ openvpn_public_ip }}-{{ openvpn_client_name }}.ovpn"
